@@ -8,6 +8,12 @@
 
 
 
+### 同步 IO 和 异步 IO
+
+...
+
+
+
 ### StackOverFlow 和 OutOfMemory 出现的原因：
 
 **栈溢出**：每一个 JVM 线程都拥有一个私有的 JVM 线程栈，用于存放当前线程的 JVM 栈帧。**如果某个线程的线程栈空间被耗尽，没有足够资源分配给新创建的栈帧，就会抛出java.lang.StackOverflowError 错误。**
