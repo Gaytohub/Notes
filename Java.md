@@ -83,7 +83,7 @@ Selector（选择器）用于监听多个通道的事件（比如：连接打开
 
 3. 一个类可以实现多个接口，但只能继承一个抽象类。接口自己本身可以通过 extends 关键字扩展多个接口。
 
-4. 从设计层面来讲，抽象是对类对抽象，是一种模版设计，而接口是对行为的抽象，是对行为的规范。
+4. 从设计层面来讲，抽象是对类的抽象，是一种模版设计，而接口是对行为的抽象，是对行为的规范。
 
    
 
@@ -138,7 +138,7 @@ Java 程序通过栈上的 Reference 数据来操作堆上的具体数据。目�
 
 ### Java 的四种引用类型：
 
-1. 强引用：Object o = new Object() 这种对象永远不会被回收，即时内存不足，JVM 抛出 OOM，也不会回收。
+1. 强引用：Object o = new Object() 这种对象永远不会被回收，即使内存不足，JVM 抛出 OOM，也不会回收。
 
 2. 软引用：SoftReference<Object> o = new SoftReference<Object(new Object)>
 
@@ -259,6 +259,18 @@ CMS 收集器：更多关注用户线程的停顿时间，提高用户体验，�
    DiscardPolicy ：不处理新任务，直接丢弃掉。
 
    DiscardOldestPolicy ：丢弃最早的未处理的任务请求。
+
+#### CPU 密集型 （CPU BOUND）
+
+CPU 密集型，即计算密集型，大部分的状况是 CPU 负载 100%，CPU 要读写IO，但 IO 很短时间可以完成，而 CPU 还要花很多时间计算。
+
+#### IO 密集型（IO BOUND）
+
+大部分状况是 CPU 在等 IO 操作完成，CPU 负载并不高！
+
+CPU 密集型任务配置应尽可能小的线程，如 CPU 数目 + 1（加一个线程主要是为了当某线程偶尔出现故障时，额外的线程能保证 CPU 时钟周期不浪费）。
+
+IO 密集型任务并不是一直在执行任务，则应该配置尽可能多的线程，如 2 * CPU 数目，让这些线程做 IO 操作去。
 
 
 
@@ -438,11 +450,115 @@ CAS 原理：在内存值和期望值相同时，将内存值更新为需要的�
 
 
 
-### ConcurrentHashMap 线程安全原理：....
+### ConcurrentHashMap 源码解析
 
-分段机制：segment 分段锁，每段加 ReentrantLock 可重入锁。
+#### ConcurrentHashMap 中几个重要概念
 
-定位元素：先找 segment 数组，再在 segment 中 HashEntry 数组下标。
+``````java
+private static final int MAXIMUM_CAPACITY = 1 << 30;
+private static final int DEFAULT_CAPACITY = 16;
+static final int TREEIFY_THRESHOLD = 8;
+static final int UNTREEIFY_THRESHOLD = 6;
+static final int MIN_TREEIFY_CAPACITY = 64;
+
+//表示正在转移
+static final int MOVED = -1;
+
+//表示已经转换成树
+static final int TREEBIN = -2;
+
+//默认没初始化的数组，用来保存元素
+transient volatile Node<K,V>[] table;
+
+//转移的时候用的数组
+private transient volatile Node<K,V>[] nextTable;
+
+//用来控制初始化和扩容的。默认值为 0 ，当在初始化的时候指定了大小，这会将这个大小保存在 sizeCtl 中，
+//大小为数组的 0.75 。
+//当为负的时候，说明正在初始化或扩张。
+//    -1 表示初始化
+//    -（1 + n），其中 n 表示活动的扩张线程
+private transient volatile int sizeCtl;
+``````
+
+#### ConcurrentHashMap 中几个重要的类
+
+``````java
+//Node<K, V> 这是构成每个元素的基本类
+static class Node<K, V> implements Map.Entry<K, V>{
+  
+}
+
+//TreeNode<K, V> 构造树的节点
+static class TreeNode<K, V> extends Node<K, V>{
+  
+}
+
+//TreeBin 用作树的头节点，只存储 root 和 first 节点，不存储节点的 key, value 值
+static class TreeBin<K, V> extends Node<K, V>{
+  
+}
+
+//ForwardingNode 在转移的时候放在头部的节点，是一个空节点
+static class ForwardingNode<K, V> extends Node<K, V>{
+  
+}
+``````
+
+#### ConcurrentHashMap 中几个重要的方法
+
+``````java
+//用来返回节点数组指定位置节点的原子操作
+static final <K, V> Node<K, V> tabAt(Node<K, V>[] tab, int i){
+  
+}
+
+//cas 操作，在指定位置设定值
+static final <K, V> boolean casTabAt(Node<K, V>[] tab, int i, Node<K, V> c, Node<K, V> v){
+  
+}
+
+//原子操作，在指定位置设定值
+static final <K, V> void setTabAt(Node<K, V>[] tab, int i, Node<K, V> v){
+  
+}
+``````
+
+#### ConcurrentHashMap 的 put 操作详解
+
+`````java
+//下面是 put 方法的源码
+public V put(K key, V value){
+  return putVal(key, value, false);
+}
+
+//单纯的调用 putVal 方法，并且 putVal 的第三个参数设置为 false
+//当设置为 false 的时候表示这个 value 一定会设置
+//当设置为 true 的时候，只有当这个 key 的 value 为空的时候才会设置
+`````
+
+``````java
+/*
+* 当添加一对键值对的时候，首先会去判断 tab 数组是否初始化了。
+* 如果没有的话，就首先初始化数组
+*		然后计算该 key 值应当放在数组的哪个位置。
+* 如果这个位置为空，使用 CAS 的方式进行直接添加。 
+* 如果这个位置不为空，则取出这个节点来
+* 如果取出来节点的 hash 值是 MOVED(-1)的话，则表示当前正在对这个数组进行扩容（复制到新数组），
+* 则当前线程也去帮助扩容。
+* 最后一种情况就是，如果这个节点，不为空，也不在扩容，则通过 synchronized 来加锁，再进行添加操作。
+*		此时需要判断当前取出的节点位置存放的是链表还是树
+* 	如果是链表，则遍历整个链表，取出每个节点的 key 和要插入的 key 值比较，如果 key 相等，则说明是同一个
+* 			key，则覆盖原有的 value，否则的话就添加到链表的末尾。
+* 	如果是树的话，就调用 putTreeVal 方法，把这个元素添加到树中去。
+* 最后添加完成后，会判断在该节点处共有多少个节点（添加节点前），如果达到 8 个及以上了，
+* 就调用 treeifyBin 方法来尝试将该处的链表转换为树，或是扩容数组。
+*/
+``````
+
+
+
+
 
 
 
@@ -472,6 +588,21 @@ Java 中的内存泄漏，广义通俗的说，就是：不再会被使用的对
 
 
 
+#### RocketMQ 的持久化机制
+
+涉及的核心角色：
+
+1. CommitLog：消息真正的存储文件。
+2. CommitQueue：消息消费的逻辑队列，类似数据库索引。
+3. IndexFile：消息索引文件，主要存储 Key 和 offset 对应关系，提升消息检索速度。
+
+刷盘时机和策略：
+
+1. 异步刷盘（默认）：消息写入 PageCache 中，就立刻给客户端返回成功。当 PageCache 中消息累积到一定量时，触发写操作。
+2. 同步刷盘：消息写入内存中的 PageCache 后，立即通知刷盘线程刷盘，然后等待刷盘完成，执行完成后唤醒等待线程，返回成功状态。
+
+
+
 ### 分布式 CAP
 
 C ：一致性，所有节点同一时间的数据应完全一致（每次写操作之后的读操作，都必须返回该值）。
@@ -489,72 +620,6 @@ CA without P ：如果不要求 P（不允许分区，无异于单机），C（�
 CP without A ：如果不要求A（可用性），可以保证各分区之间强一致性，但会导致分区之间同步时间的无限延长（例如网络故障时的只读不写）。
 
 AP without C ：放弃一致性，来保证节点的高可用性和分区容错。但是放弃一致性就导致了全局数据的不一致。
-
-
-
-### 分布式锁
-
-分布式锁是为了在分布式系统中，实现不同线程对代码和资源的同步访问。可以基于数据库（如 MySQL）或者基于缓存（如 Redis）实现分布式锁。
-
-#### 基于 Redis 的 setnx() 和 expire() 做分布式锁 （遗弃）
-
-**setnx()**: setnx 的含义就是 SET if NOT EXISTS，其中有两个参数 setnx(key, value)。该方法是原子的，如果 key 不存在，则设置当前 key 成功，返回 1；如果当前 key 已经存在，则设置当前 key 失败，返回 0。
-
-**expire()**: expire() 设置过期时间，setnx() 设置的 key 的超时时间需要由 expire() 来设置。
-
-**使用步骤**：
-
-1. setnx(lock_key, 1) 如果返回 0，则说明占位失败；如果返回 1，则说明占位成功。
-2. expire() 命令对 lock_key 设置超时时间，为的是避免死锁问题。
-3. 执行完业务代码后，可以通过 delete 命令删除 key。
-
-这个方案有些问题，比如，**如果在第一步 setnx 执行成功后，在 expire 执行成功之前，发生了宕机的现象，那么就依然会出现死锁的问题。**下面方案是对其进行的完善。
-
-#### 基于 Redis 的 setnx()、get()、getset() 方法做分布式锁
-
-这个方案的背景主要是在 setnx() 和 expire() 的方案上针对可能存在的死锁问题，做了一些优化。
-
-**getset**: 这个命令有两个参数 getset(key, newValue)。该方法是原子的，对 key 设置 newValue 这个值，并且返回 key 原来的旧值。假设 key 原来是不存在的，那么多次执行这个命令，会出现下边的效果：
-
-1. getset(key, "value1") 返回 null ，此时 key 的值会被设置为 value1
-2. getset(key, "value2") 返回 value1 此时 key 的值会被设置为 value2
-3. 依此类推！
-
-**使用步骤**
-
-1. setnx(lock_key, 当前时间 + 过期超时时间)，如果返回 1，则获取锁成功；如果返回 0 则没有获取到锁。
-2. get(lock_key) 获取值 oldExpireTime，并将这个 value 值与当前的系统时间进行比较，如果小于当前系统时间，则认为这个锁已经超时，可以允许别的请求重新获取。
-3. 计算 newExpireTime = 当前时间 + 过期超时时间，然后 getset(lock_key, newExpireTime) 会返回当前 lock_key 的值 currentExpireTime。
-4. 判断 currentExpireTime 和 oldExpireTime 是否相等，如果相等，说明当前 getset 设置成功，获取到了锁。如果不相等，说明这个锁又被别的请求获取走了，那么当前请求可以直接返回失败，或者继续重试。
-5. 在获取到锁之后，当前线程可以开始自己的业务处理，当处理完毕后，比较自己的处理时间和对于锁设置的超时时间，如果小于锁设置的超时时间，则直接执行 delete 释放锁；如果大于锁设置的超时时间，则不需要再对锁进行处理。
-
-#### Redis 官方推荐的单实例中实现分布式锁的正确方式（原子性非常重要）
-
-1. 设置锁时候，使用 set 命令，因为其中包含了 setnx, expire 的功能，并且有原子操作的效果，给 key 设置随机值，并且只有在 key 不存在时才设置成功返回 True，并且设置 key 的过期时间（最好使用毫秒）
-
-   ```
-   SET key_name my_random_value NX PX 30000
-   ```
-
-2. 在获取锁并完成相关业务后，需要删除自己设置的锁（必须是只能删除自己设置的锁，不能删除他人设置的锁），**删除原因**：保证服务器资源的高利用效率，不用等到锁过期自动删除。**删除方法**：最好使用 Lua 脚本删除（ Redis 保证执行脚本时不执行其他操作，保证操作的原子性）。
-
-#### Redis 多节点实现的分布式锁（RedLock）：有效防止单点故障
-
-假设有 5 个完全独立的 Redis 主服务器。
-
-1. 获取当前时间戳
-
-2. Client 尝试按照顺序使用相同的 Key, value 获取所有 Redis 服务的锁。在获取锁的过程中，获取时间比锁过期时间短很多（这样为了不要过长时间等待已经关闭的 Redis 服务，并且试着获取下一个 Redis 实例）
-
-   比如：TTL 为 5s，设置获取锁最多用 1s，所以如果 1s 内无法获取到锁，就放弃获取这个锁，从而尝试获取下个锁。
-
-3. Client 获取所有能获取到的锁后的时间，减去第一步的时间，这个时间差要小于 TTL 时间，并且至少有 3 个 Redis 实例成功获取锁，才能真正的获取锁成功。
-
-4. 如果成功获取锁，则锁的真正有效时间是 TTL 减去第三步的时间差 的时间。
-
-   比如：TTL 是 5s，获取所有锁用了 2s，则真正锁有效时间为 3s（其实应该再减去时钟飘移）
-
-5. 如果客户端由于某些原因获取锁失败，便会开始解锁所有 Redis 实例，因为可能已经获了小于 3 个锁，必须释放，否则影响其他 Client 获取锁。
 
 
 
