@@ -556,9 +556,221 @@ public V put(K key, V value){
 */
 ``````
 
+#### ConcurrentHashMap 扩容
+
+当数组长度小于 64 的时候，使用 tryPresize 函数将数组长度扩展一倍。
+
+否则，对需要扩张的头节点进行加锁，再将链表转化为树。
+
+#### ConcurrentHashMap 的 get 操作
+
+get 函数本身不加锁， 支持并发操作。get 首先通过计算 key 的 hash 值来确定该元素在数组的哪个位置，然后该位置的所有节点，存在 key 相同的就返回 value，否则返回 null。
+
+hash 值小于 0 的时候有两种情况，一个是为 -1，说明正在扩容，该节点是 FWD 节点，需要调用 FWD 的 find 方法到 nextTable 中找。 另一个是为 -2，说明该节点是红黑树，需要使用红黑树的查找算法来进行查找。
 
 
 
+### AbstractQueuedSynchronizer 源码解析
+
+``````java
+//头节点，可以当作当前持有锁的线程
+private transient volatile Node head;
+
+//阻塞的尾节点，每个新的节点进来，都插到最后，也就形成了一个链表
+private transient volatile Node tail;
+
+//代表当前锁的状态，0 代表没有被占用，大于 0 代表当前有线程持有锁
+//这个值可以大于 1，以为锁可以重入，每次重入都加上 1
+private volatile int state;
+
+//代表当前持有独占锁的线程。
+private transient Thread exclusiveOwnerThread;
+``````
+
+#### 线程抢锁
+
+`````java
+static final class FairSync extends Sync {
+  private static final long serialVersionUID = -3000897897090466540L;
+
+  //争锁
+  final void lock() {
+    acquire(1);
+  }
+  
+  public final void acquire(int arg) {
+    //首先调用 tryAcquire(1)，尝试获取锁，如果直接就获取到了就不需要进队列排队了。
+    if (!tryAcquire(arg) &&
+        //tryAcquire(1) 没有成功，这个时候需要把当前线程挂起，放到阻塞队列中。
+        acquireQueued(addWaiter(Node.EXCLUSIVE), arg))
+      selfInterrupt();
+  }
+  
+  //返回true：1.没有线程在等待锁；2.重入锁，线程本来就持有锁。
+  //获取当前线程和锁的 state 状态。
+  //如果 state 值为 0，则判断等待队列中是否有线程在等待，
+  //如没有，则使用 CAS 的方式尝试获取锁，获取成功，就标记一下锁被当前线程占有，并返回 true
+  //	如果使用 CAS 尝试获取锁失败，则说明几乎同一时间，另外一个线程获取到了锁资源，则返回 false
+  //等待队列中有线程就返回 false
+  //如果 state 不是零，就判断占有锁的线程是不是当前线程。
+  //是的话，就更新 state 值，并返回 true
+  //不是的话，就返回 false
+  protected final boolean tryAcquire(int acquires) {
+    final Thread current = Thread.currentThread();
+    int c = getState();
+    if (c == 0) {
+      if (!hasQueuedPredecessors() &&
+          compareAndSetState(0, acquires)) {
+        setExclusiveOwnerThread(current);
+        return true;
+      }
+    }
+    else if (current == getExclusiveOwnerThread()) {
+      int nextc = c + acquires;
+      if (nextc < 0)
+        throw new Error("Maximum lock count exceeded");
+      setState(nextc);
+      return true;
+    }
+    return false;
+  }
+  
+  //把当前线程包装成 NODE，同时使用 CAS 的方式添加到队列末尾。
+  private Node addWaiter(Node mode) {
+    Node node = new Node(Thread.currentThread(), mode);
+    Node pred = tail;
+    if (pred != null) { 
+      node.prev = pred; 
+      if (compareAndSetTail(pred, node)) {
+        pred.next = node;
+        return node;
+      }
+    }
+    //到这一步说明 ： pred == null 或者 CAS 失败（有线程在竞争入队）
+    enq(node);
+    return node;
+  }
+  
+  //等待队列为空 或者 有线程竞争入队，导致进入该函数。
+  //该函数使用自旋的方式入队。
+  private Node enq(final Node node) {
+    for (;;) { 
+      Node t = tail; 
+      //如果是因为等待队列为空，则先初始化队列，再入队。
+      if (t == null) { // Must initialize 
+        if (compareAndSetHead(new Node())) 
+          tail = head; 
+      } else { 
+        node.prev = t; 
+        if (compareAndSetTail(t, node)) { 
+          t.next = node; 
+          return t; 
+        } 
+      } 
+    } 
+  }
+  
+  final boolean acquireQueued(final Node node, int arg) { 
+    boolean failed = true; 
+    try { 
+      boolean interrupted = false; 
+      for (;;) { 
+        final Node p = node.predecessor(); 
+        //如果 p == head，说明当前节点是阻塞队列的第一个，
+        //这种情况可以尝试抢一下锁
+        if (p == head && tryAcquire(arg)) { 
+          setHead(node); 
+          p.next = null; // help GC 
+          failed = false; 
+          return interrupted; 
+        } 
+        //如果当前 node 不是阻塞队列第一个，
+        //或者 tryAcquire(arg) 没有抢赢
+        if (shouldParkAfterFailedAcquire(p, node) &&
+            parkAndCheckInterrupt()) 
+          interrupted = true; 
+      } 
+    } finally { 
+      if (failed) cancelAcquire(node); 
+    } 
+  }
+  
+  //当前线程没有抢到锁，是否需要挂起当前线程？
+  //首先获取前驱节点的 waitStatus
+  //如果前驱节点的 waitStatus == -1，说明前驱节点状态正常，当前线程需要挂起。返回true
+  //如果前驱节点的 waitStatus > 0，说明前驱节点取消了排队，
+  //（而挂起线程的唤醒需要由前驱节点完成）
+  //就去找 waitStatus <= 0 的节点，把它设为前驱节点。
+  // 进入 else 说明前驱节点的 waitStatus 是 0（初始化节点后从来未动过），
+  // 则使用 CAS 的方式把前驱节点的 waitStatus 设置为 -1.
+  private static boolean shouldParkAfterFailedAcquire(Node pred, Node node) { 
+    int ws = pred.waitStatus; 
+    if (ws == Node.SIGNAL) 
+      return true; 
+    if (ws > 0) { 
+      do { 
+        node.prev = pred = pred.prev; 
+      } while (pred.waitStatus > 0); 
+      pred.next = node; 
+    } else { 
+      compareAndSetWaitStatus(pred, ws, Node.SIGNAL); 
+    } 
+    return false; 
+  }
+  
+  // shouldParkAfterFailedAcquire 返回 true
+  // 则执行对当前线程的挂起
+  private final boolean parkAndCheckInterrupt() { 
+    LockSupport.park(this); 
+    return Thread.interrupted(); 
+  }
+`````
+
+#### 解锁操作
+
+`````java
+public void unlock() { 
+  sync.release(1); 
+}
+
+public final boolean release(int arg) { 
+  if (tryRelease(arg)) { 
+    Node h = head; 
+    if (h != null && h.waitStatus != 0) 
+      unparkSuccessor(h); 
+    return true; 
+  } 
+  return false; 
+}
+
+protected final boolean tryRelease(int releases) { 
+  int c = getState() - releases; 
+  if (Thread.currentThread() != getExclusiveOwnerThread()) 
+    throw new IllegalMonitorStateException(); 
+  boolean free = false; 
+  if (c == 0) { 
+    free = true; 
+    setExclusiveOwnerThread(null); 
+  } 
+  setState(c); 
+  return free; 
+}
+
+private void unparkSuccessor(Node node) { 
+  int ws = node.waitStatus; 
+  if (ws < 0) 
+    compareAndSetWaitStatus(node, ws, 0); 
+  Node s = node.next; 
+  if (s == null || s.waitStatus > 0) { 
+    s = null; 
+    for (Node t = tail; t != null && t != node; t = t.prev) 
+      if (t.waitStatus <= 0) 
+        s = t; 
+  } 
+  if (s != null) 
+    LockSupport.unpark(s.thread); 
+}
+`````
 
 
 
@@ -578,7 +790,7 @@ Java 中的内存泄漏，广义通俗的说，就是：不再会被使用的对
 
 
 
-#### 消息队列常用的使用场景：
+### 消息队列常用的使用场景：
 
 1. 异步处理
 2. 应用解耦：订单系统：用户下单，订单系统完成持久化处理，将消息写入消息队列，返回用户订单下单成功。库存系统：订阅下单的消息，采用拉 / 推的方式，获取下单的信息，库存系统根据下单信息，进行库存操作，实现了两者的解耦。
@@ -588,7 +800,7 @@ Java 中的内存泄漏，广义通俗的说，就是：不再会被使用的对
 
 
 
-#### RocketMQ 的持久化机制
+### RocketMQ 的持久化机制
 
 涉及的核心角色：
 
@@ -600,6 +812,18 @@ Java 中的内存泄漏，广义通俗的说，就是：不再会被使用的对
 
 1. 异步刷盘（默认）：消息写入 PageCache 中，就立刻给客户端返回成功。当 PageCache 中消息累积到一定量时，触发写操作。
 2. 同步刷盘：消息写入内存中的 PageCache 后，立即通知刷盘线程刷盘，然后等待刷盘完成，执行完成后唤醒等待线程，返回成功状态。
+
+### RocketMQ 和 Kafka 的区别：
+
+数据可靠性：RocketMQ 支持同步刷盘和异步刷盘。Kafka 仅支持异步刷盘。
+
+性能对比：Kafka 性能较 RocketMQ 更好。
+
+消费失败重试：Kafka 不支持消费失败重试机制，需要自己实现。RocketMQ 消费失败支持定时重试。
+
+分布式事务消息：Kafka 不支持分布式事务消息。RocketMQ 支持。
+
+单机支持的队列数：Kafka 在队列数超过 64 的时候，负载会明显增高。RocketMQ 单机最高 5w 队列，负载变化不明显。
 
 
 
