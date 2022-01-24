@@ -37,6 +37,16 @@ git commit -m "描述"
 
 
 
+### 问题：Failed to connect to github.com port 443: Operation timed out
+
+源自：https://www.jianshu.com/p/471aeba64724
+
+1、设置代理方法即可解决：``git config --global http.proxy "localhost:port"``
+
+2、完成后取消设置：``git config --global --unset http.proxy``
+
+
+
 ### 版本回退
 
 每次对文件进行修改，并执行 commit 时，会生成一个版本号，对应 commit id。 
