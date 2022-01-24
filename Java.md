@@ -847,6 +847,12 @@ AP without C ：放弃一致性，来保证节点的高可用性和分区容错�
 
 
 
+### 分布式 CAP 中的 C  和 数据库 ACID 中的 C 有区别吗？
+
+分布式 CAP 中的 C 是指所有分区在同一时间的数据应当是完全一致的，也就是强一致性。而数据库中的 CAP 是指数据库中的数据应当是从某种一致性状态进入另一种一致性状态。
+
+
+
 ### AbstractQueuedSynchronizer （AQS）
 
 AbstractQueuedSynchronizer：抽象的队列式同步器，AQS 定义了一套多线程访问共享资源的同步器框架，许多同步类实现都依赖于它，如常用的 ReentrantLock / Semaphore / CountDownLatch
