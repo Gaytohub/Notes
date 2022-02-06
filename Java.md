@@ -93,6 +93,52 @@ Selector（选择器）用于监听多个通道的事件（比如：连接打开
 
 
 
+### 关于 Comparator 我必须知道的事儿
+
+jdk 官方默认是升序，是基于：
+
+```
+< return -1
+= return 0
+> return 1
+```
+
+以上内容可以理解为硬性规定，也就是说，排序是由这三个参数同时决定的。
+
+如果是降序就必须完全相反：
+
+```
+< return 1
+= return 0
+> return -1
+```
+
+所以，如果我们这样写就是降序：
+
+```java
+if (o1 < o2){
+  return 1;
+} else if (o1 > o2){
+  return -1;
+} else {
+  return 0;
+}
+```
+
+这样写就是升序：
+
+```java
+if (o1 < o2){
+  return -1;
+} else if (o1 > o2){
+  return 1;
+} else {
+  return 0;
+}
+```
+
+
+
 ### 为什么不调用 run() ？ 而需要调用 start() ?
 
 New Thread() 线程会进入新建状态，调用 start 方法会启动一个线程并使其进入就入就绪状态，等待分配 CPU 时间片就可以运行了。 start 会执行线程相应的准备工作，然后自动执行 run 方法的内容（真的多线程）。直接调用 run 方法相当于在主线程执行普通方法。
